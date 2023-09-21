@@ -24,7 +24,7 @@ var (
 	gatewayPeer  = "peer0.org1.example.com"
 )
 
-func init() {
+func Init() {
 	// The gRPC client connection should be shared by all Gateway connections to this endpoint
 	clientConnection := newGrpcConnection()
 	defer clientConnection.Close()
