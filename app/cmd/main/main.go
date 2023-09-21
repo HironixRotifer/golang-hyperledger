@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/HironixRotifer/golang-hyperledger/app/pkg/controllers"
+	"github.com/HironixRotifer/golang-hyperledger/app/pkg/gateway"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
@@ -10,6 +11,8 @@ func main() {
 	app := gin.Default()
 	app.Use(cors.Default())
 
+	gateway.Init()
+	
 	app.POST("/book/create", controllers.CreateBook)
 	app.POST("/book/create", controllers.DeleteBook)
 	app.GET("/book/create", controllers.GetBookById)
