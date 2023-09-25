@@ -1,133 +1,123 @@
 package gateway
 
 import (
-	"crypto/x509"
 	"fmt"
+	"log"
 	"os"
-	"path"
-	"time"
+	"path/filepath"
+	"strings"
 
-	"github.com/hyperledger/fabric-gateway/pkg/client"
-	"github.com/hyperledger/fabric-gateway/pkg/identity"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"github.com/hyperledger/fabric-sdk-go/pkg/core/config"
+	"github.com/hyperledger/fabric-sdk-go/pkg/gateway"
 )
 
 var (
-	Contract     *client.Contract
-	mspID        = "Org1MSP"
-	cryptoPath   = "../../../test-network/organizations/peerOrganizations/org1.example.com"
-	certPath     = cryptoPath + "/users/User1@org1.example.com/msp/signcerts/cert.pem"
-	keyPath      = cryptoPath + "/users/User1@org1.example.com/msp/keystore/"
-	tlsCertPath  = cryptoPath + "/peers/peer0.org1.example.com/tls/ca.crt"
-	peerEndpoint = "localhost:7051"
-	gatewayPeer  = "peer0.org1.example.com"
+	Contract *gateway.Contract
 )
 
+type Org struct {
+	Number uint8
+	Name   string
+	Wallet *gateway.Wallet
+}
+
 func Init() {
-	// The gRPC client connection should be shared by all Gateway connections to this endpoint
-	clientConnection := newGrpcConnection()
-	defer clientConnection.Close()
+	os.RemoveAll("users")
+	os.RemoveAll("books")
+	os.Setenv("DISCOVERY_AS_LOCALHOST", "true")
 
-	id := newIdentity()
-	sign := newSign()
+	org1, org2 := NewOrg(1, "Users"), NewOrg(2, "Books")
 
-	// Create a Gateway connection for a specific client identity
-	gw, err := client.Connect(
-		id,
-		client.WithSign(sign),
-		client.WithClientConnection(clientConnection),
-		// Default timeouts for different gRPC calls
-		client.WithEvaluateTimeout(5*time.Second),
-		client.WithEndorseTimeout(15*time.Second),
-		client.WithSubmitTimeout(5*time.Second),
-		client.WithCommitStatusTimeout(1*time.Minute),
+	u1, u2 := []string{"nikola", "Technology"}, []string{"black_kat", "War and world", "Gold fish"}
+
+	for _, user := range u1 {
+		org1.RegisterUser(user)
+	}
+	for _, user := range u2 {
+		org2.RegisterUser(user)
+	}
+	for i := 1; i < 9; i++ {
+		org2.RegisterUser(fmt.Sprint(i))
+	}
+	// Настроить пути при запуске
+	ccpPath := filepath.Join(
+		"test-network",
+		"organizations",
+		"peerOrganizations",
+		"org1.example.com",
+		"connection-org1.yaml",
+	)
+	gw, err := gateway.Connect(
+		gateway.WithConfig(config.FromFile(filepath.Clean(ccpPath))),
+		gateway.WithIdentity(org1.Wallet, "nikola"),
 	)
 	if err != nil {
-		panic(err)
-	}
-	defer gw.Close()
-
-	// Override default values for chaincode and channel name as they may differ in testing contexts.
-	chaincodeName := "basic"
-	if ccname := os.Getenv("CHAINCODE_NAME"); ccname != "" {
-		chaincodeName = ccname
+		log.Fatalf("Failed to connect to gateway: %v", err)
 	}
 
-	channelName := "mychannel"
-	if cname := os.Getenv("CHANNEL_NAME"); cname != "" {
-		channelName = cname
+	log.Println(gw)
+
+	// Подключение к сети
+	nw, err := gw.GetNetwork("test")
+	if err != nil {
+		log.Fatalf("Failed to get network: %s", err)
 	}
+	log.Println(nw)
 
-	network := gw.GetNetwork(channelName)
-	Contract = network.GetContract(chaincodeName)
+	// Получаем контракт
+	Contract = nw.GetContract("basic")
+	if err != nil {
+		log.Fatalf("Failed to get contract: %v", err)
+	}
+	log.Println(Contract)
 
-	// Contract = contract
 }
 
-// newGrpcConnection creates a gRPC connection to the Gateway server.
-func newGrpcConnection() *grpc.ClientConn {
-	certificate, err := loadCertificate(tlsCertPath)
+func NewOrg(number uint8, name string) *Org {
+	w, err := gateway.NewFileSystemWallet(strings.ToLower(name))
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
-	certPool := x509.NewCertPool()
-	certPool.AddCert(certificate)
-	transportCredentials := credentials.NewClientTLSFromCert(certPool, gatewayPeer)
-
-	connection, err := grpc.Dial(peerEndpoint, grpc.WithTransportCredentials(transportCredentials))
-	if err != nil {
-		panic(fmt.Errorf("failed to create gRPC connection: %w", err))
-	}
-
-	return connection
+	return &Org{Number: number, Name: name, Wallet: w}
 }
 
-// newIdentity creates a client identity for this Gateway connection using an X.509 certificate.
-func newIdentity() *identity.X509Identity {
-	certificate, err := loadCertificate(certPath)
+// RegisterUser registration user in the organization
+// @param: user to register
+func (o *Org) RegisterUser(user string) error {
+	credPath := filepath.Join(
+		"test-network",
+		"organizations",
+		"peerOrganizations",
+		fmt.Sprintf("org%d.example.com", o.Number),
+		"users",
+		fmt.Sprintf("User1@org%d.example.com", o.Number),
+		"msp",
+	)
+
+	certPath := filepath.Join(credPath, "signcerts", "cert.pem")
+	// read the certificate pem
+	cert, err := os.ReadFile(filepath.Clean(certPath))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	id, err := identity.NewX509Identity(mspID, certificate)
+	keyDir := filepath.Join(credPath, "keystore")
+	// there's a single file in this dir containing the private key
+	files, err := os.ReadDir(keyDir)
 	if err != nil {
-		panic(err)
+		return err
+	}
+	if len(files) != 1 {
+		return fmt.Errorf("keystore folder should have contain one file")
+	}
+	keyPath := filepath.Join(keyDir, files[0].Name())
+	key, err := os.ReadFile(filepath.Clean(keyPath))
+	if err != nil {
+		return err
 	}
 
-	return id
-}
+	identity := gateway.NewX509Identity(o.Name, string(cert), string(key))
 
-func loadCertificate(filename string) (*x509.Certificate, error) {
-	certificatePEM, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate file: %w", err)
-	}
-	return identity.CertificateFromPEM(certificatePEM)
-}
-
-// newSign creates a function that generates a digital signature from a message digest using a private key.
-func newSign() identity.Sign {
-	files, err := os.ReadDir(keyPath)
-	if err != nil {
-		panic(fmt.Errorf("failed to read private key directory: %w", err))
-	}
-	privateKeyPEM, err := os.ReadFile(path.Join(keyPath, files[0].Name()))
-
-	if err != nil {
-		panic(fmt.Errorf("failed to read private key file: %w", err))
-	}
-
-	privateKey, err := identity.PrivateKeyFromPEM(privateKeyPEM)
-	if err != nil {
-		panic(err)
-	}
-
-	sign, err := identity.NewPrivateKeySign(privateKey)
-	if err != nil {
-		panic(err)
-	}
-
-	return sign
+	return o.Wallet.Put(user, identity)
 }

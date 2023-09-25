@@ -1,6 +1,6 @@
 module github.com/HironixRotifer/golang-hyperledger/chaincode
 
-go 1.21.1
+go 1.20
 
 require github.com/hyperledger/fabric-contract-api-go v1.2.1
 

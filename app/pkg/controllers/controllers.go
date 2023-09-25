@@ -15,7 +15,6 @@ func CreateBook(c *gin.Context) {
 
 	_, err := gateway.Contract.SubmitTransaction("CreateBook", title, author, publisher)
 	if err != nil {
-		// panic(fmt.Errorf("failed to submit transaction: %w", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": "failed to submit transaction",
 			"data":    err,
